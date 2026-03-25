@@ -29,7 +29,7 @@ class FirebaseAuthentication(BaseAuthentication):
             decoded_token = auth.verify_id_token(token)
             uid = decoded_token.get('uid')
             email = decoded_token.get('email')
-            user_profile = db.collection('users').document(uid).get()
+            user_profile = db.collection('perfiles').document(uid).get()
             user_data = user_profile.to_dict() if user_profile.exists else {}
             rol = user_data.get('rol', 'aprendiz')  # Asignar 'aprendiz' por defecto si no se encuentra el rol
             class FirebaseUser:
