@@ -1,6 +1,8 @@
 import os
 
 import requests
+from rest_framework.permissions import IsAuthenticated
+from .authentication import FirebaseAuthentication
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
@@ -11,6 +13,21 @@ from firebase_admin import auth, firestore
 
 db = get_firestore_client()
 
+class PerfilAPIView(APIView):
+    authentication_classes = [FirebaseAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        try:
+            doc = db.collection('perfiles').document(request.user.uid).get()
+            data = doc.to_dict() if doc.exists else {}
+            return Response({
+                "email": request.user.email,
+                "rol": data.get('rol', 'usuario'),
+                "foto_perfil": data.get('photo_url', None),
+            }, status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 class RegistroAPIView(APIView):
     """Endpoint público para registrar un nuevo aprendiz."""
@@ -117,4 +134,83 @@ class LoginAPIView(APIView):
             return Response(
                 {"error": "Error de conexión"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+class CambiarRolAPIView(APIView):
+    """Solo el rol 'coordinador' puede cambiar roles de otros usuarios."""
+    authentication_classes = [FirebaseAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def put(self, request, uid):
+        # Solo coordinador puede cambiar roles
+        if request.user.rol != 'coordinador':
+            return Response(
+                {"error": "No tienes permiso para cambiar roles"},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        nuevo_rol = request.data.get('rol')
+        roles_validos = ['aprendiz', 'instructor', 'coordinador']
+
+        if not nuevo_rol or nuevo_rol not in roles_validos:
+            return Response(
+                {"error": f"Rol inválido. Debe ser uno de: {roles_validos}"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            # Actualiza el rol en Firestore
+            db.collection('perfiles').document(uid).update({'rol': nuevo_rol})
+            return Response(
+                {"mensaje": f"Rol actualizado correctamente a '{nuevo_rol}'"},
+                status=status.HTTP_200_OK
+            )
+        except Exception as e:
+            return Response(
+                {"error": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+class ListarUsuariosAPIView(APIView):
+    """Lista todos los usuarios. Solo coordinador e instructor pueden acceder."""
+    authentication_classes = [FirebaseAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        if request.user.rol not in ['coordinador', 'instructor']:
+            return Response(
+                {"error": "No tienes permiso para ver esta información"},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        try:
+            # Filtra por rol si se pasa como query param
+            # Ejemplo: /api/usuarios/?rol=aprendiz
+            rol_filtro = request.query_params.get('rol', None)
+
+            if rol_filtro:
+                docs = db.collection('perfiles').where('rol', '==', rol_filtro).stream()
+            else:
+                docs = db.collection('perfiles').stream()
+
+            usuarios = []
+            for doc in docs:
+                data = doc.to_dict()
+                usuarios.append({
+                    "uid": doc.id,
+                    "email": data.get('email', ''),
+                    "rol": data.get('rol', 'aprendiz'),
+                    "foto_perfil": data.get('photo_url', None),
+                    "fecha_registro": str(data.get('fecha_registro', '')),
+                })
+
+            return Response(
+                {"datos": usuarios, "total": len(usuarios)},
+                status=status.HTTP_200_OK
+            )
+        except Exception as e:
+            return Response(
+                {"error": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
